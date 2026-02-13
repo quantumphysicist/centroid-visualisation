@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Centroid Visualiser</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 2rem 1rem;
+  }
+
+  h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.02em;
+  }
+
+  .explanation {
+    max-width: 640px;
+    text-align: center;
+    color: #555;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    margin-bottom: 1.25rem;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .stats {
+    font-size: 0.9rem;
+    color: #333;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 0.4rem 1rem;
+    display: flex;
+    gap: 1.25rem;
+  }
+
+  .stats span { font-weight: 600; color: #1a1a2e; }
+
+  button {
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.45rem 1.1rem;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+  }
+  button:active { transform: scale(0.97); }
+
+  .btn-undo {
+    background: #e2e8f0;
+    color: #334155;
+  }
+  .btn-undo:hover { background: #cbd5e1; }
+
+  .btn-clear {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
+  .btn-clear:hover { background: #fecaca; }
+
+  .canvas-wrap {
+    border: 2px solid #c4c8d0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #ffffff;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    /* Prevent the canvas from causing layout jank */
+    line-height: 0;
+  }
+
+  canvas {
+    display: block;
+    cursor: crosshair;
+  }
+
+  .hint {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    color: #999;
+  }
+</style>
+</head>
+<body>
+
+<h1>Centroid Visualiser</h1>
+
+<p class="explanation">
+  The <strong>centroid</strong> of a finite set of points is the (unweighted) arithmetic mean of their coordinates &mdash; equivalently, the centre of mass if each point is assigned equal mass.
+</p>
+
+<p class="explanation">
+  For <em>n</em> points it is calculated as
+  <strong>c<sub>x</sub>&nbsp;=&nbsp;1/n&thinsp;&sum;&thinsp;x<sub>i</sub></strong>,
+  <strong>c<sub>y</sub>&nbsp;=&nbsp;1/n&thinsp;&sum;&thinsp;y<sub>i</sub></strong>.
+</p>
+
+<p class="explanation">
+  Click inside the canvas to add points and watch the centroid update in real time.
+</p>
+
+<div class="toolbar">
+  <div class="stats">
+    <div>Points:&ensp;<span id="stat-n">0</span></div>
+    <div>Centroid:&ensp;<span id="stat-cx">&mdash;</span>,&ensp;<span id="stat-cy">&mdash;</span></div>
+  </div>
+  <button class="btn-undo" id="btn-undo">&#8630; Undo</button>
+  <button class="btn-clear" id="btn-clear">Clear</button>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+
+<p class="hint">Click anywhere on the white area to place a point.</p>
+
+<script>
+(function () {
+  'use strict';
+
+  // --- Configuration ---
+  const W = 800;          // logical width of the drawing area
+  const H = 500;          // logical height of the drawing area
+  const POINT_R = 5;      // radius of user points (blue)
+  const CENTROID_R = 8;   // radius of centroid marker (red)
+
+  // --- DOM refs ---
+  const canvas  = document.getElementById('canvas');
+  const ctx     = canvas.getContext('2d');
+  const statN   = document.getElementById('stat-n');
+  const statCx  = document.getElementById('stat-cx');
+  const statCy  = document.getElementById('stat-cy');
+
+  // --- devicePixelRatio handling ---
+  // We size the canvas backing store at dpr × logical size so lines and circles
+  // render crisply on HiDPI / Retina displays, while the CSS size stays fixed.
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.scale(dpr, dpr);           // scale context so we draw in logical pixels
+
+  // --- State ---
+  const points = [];  // array of {x, y} in logical canvas coordinates
+
+  // ---------------------------------------------------------------
+  // Click → add point
+  // ---------------------------------------------------------------
+  canvas.addEventListener('click', function (e) {
+    // --- Click coordinate conversion ---
+    // getBoundingClientRect gives the element's position in viewport pixels.
+    // Subtracting rect.left/top converts clientX/clientY to canvas-local
+    // coordinates that already correspond to our logical (CSS) size, because
+    // we set canvas.style.width/height to W/H.
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top)  * (H / rect.height);
+
+    points.push({ x: x, y: y });
+    render();
+  });
+
+  // ---------------------------------------------------------------
+  // Buttons
+  // ---------------------------------------------------------------
+  document.getElementById('btn-undo').addEventListener('click', function () {
+    if (points.length === 0) return;   // undo on empty → no effect
+    points.pop();
+    render();
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', function () {
+    points.length = 0;
+    render();
+  });
+
+  // ---------------------------------------------------------------
+  // Centroid computation
+  // ---------------------------------------------------------------
+  // Returns {x, y} or null when there are no points.
+  // cx = (1/n) Σ xi ,  cy = (1/n) Σ yi
+  function computeCentroid() {
+    var n = points.length;
+    if (n === 0) return null;
+
+    var sumX = 0, sumY = 0;
+    for (var i = 0; i < n; i++) {
+      sumX += points[i].x;
+      sumY += points[i].y;
+    }
+    return { x: sumX / n, y: sumY / n };
+  }
+
+  // ---------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------
+  function render() {
+    // Clear
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw faint grid (optional, helps readability)
+    ctx.strokeStyle = '#f0f0f0';
+    ctx.lineWidth = 1;
+    for (var gx = 50; gx < W; gx += 50) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+    }
+    for (var gy = 50; gy < H; gy += 50) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+    }
+
+    // Draw blue user points
+    ctx.fillStyle = '#3b82f6';
+    for (var i = 0; i < points.length; i++) {
+      ctx.beginPath();
+      ctx.arc(points[i].x, points[i].y, POINT_R, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Compute & draw centroid
+    var c = computeCentroid();
+
+    if (c) {
+      // Dashed lines from centroid to axes (subtle guide)
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(220, 38, 38, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(c.x, 0); ctx.lineTo(c.x, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, c.y); ctx.lineTo(W, c.y); ctx.stroke();
+      ctx.restore();
+
+      // Red centroid dot
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, CENTROID_R, 0, Math.PI * 2);
+      ctx.fill();
+
+      // White inner ring for visibility
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, CENTROID_R, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Label
+      ctx.fillStyle = '#dc2626';
+      ctx.font = '600 12px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('centroid', c.x + CENTROID_R + 5, c.y);
+    }
+
+    // Update stats panel
+    statN.textContent = points.length;
+    if (c) {
+      statCx.textContent = c.x.toFixed(1);
+      statCy.textContent = c.y.toFixed(1);
+    } else {
+      statCx.innerHTML = '&mdash;';
+      statCy.innerHTML = '&mdash;';
+    }
+  }
+
+  // Initial render (empty canvas with grid)
+  render();
+})();
+</script>
+</body>
+</html>
